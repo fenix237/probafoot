@@ -1,0 +1,9 @@
+data/probafoot.sqlite
+data/dl.log
+__pycache__/
+.env
+node_modules/
+web/.next/
+data/raw/
+data/*.log
+reports/

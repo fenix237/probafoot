@@ -1,0 +1,87 @@
+# Démarrage rapide :
+#   docker compose run --rm worker-once      # 1re fois : importe les données et crée les backtests (quelques minutes)
+#   docker compose up -d                     # API + front sur http://127.0.0.1:8000, et mise à jour quotidienne
+# Avec HTTPS (VPS public) : DOMAIN=probafoot.example.com docker compose --profile https up -d
+name: probafoot
+
+x-app: &app
+  build: .
+  image: probafoot:latest
+  environment:
+    PROBAFOOT_DB: /app/data/probafoot.sqlite
+    LEAGUES: ${LEAGUES:-E0 F1}
+    TEST_SEASONS: ${TEST_SEASONS:-2324 2425 2526}
+  volumes:
+    - probafoot-data:/app/data
+  restart: unless-stopped
+
+services:
+  api:
+    <<: *app
+    ports:
+      # Local seulement par défaut. Pour exposer sans proxy HTTPS : "8000:8000" (déconseillé).
+      - "127.0.0.1:8000:8000"
+    read_only: true
+    tmpfs: [/tmp]
+    # Seul /app/data (volume) est inscriptible.
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  worker:
+    <<: *app
+    command: ["/usr/local/bin/refresh.sh"]
+    environment:
+      PROBAFOOT_DB: /app/data/probafoot.sqlite
+      LEAGUES: ${LEAGUES:-E0 F1}
+      TEST_SEASONS: ${TEST_SEASONS:-2324 2425 2526}
+      REFRESH_HOURS: ${REFRESH_HOURS:-24}
+    healthcheck:
+      disable: true
+    depends_on: [api]
+
+  # Capture des cotes (opt-in) : docker compose --profile capture up -d   (nécessite ODDS_API_KEY, voir le fichier d'exemple)
+  capture:
+    <<: *app
+    profiles: ["capture"]
+    command: ["/usr/local/bin/capture.sh"]
+    environment:
+      PROBAFOOT_DB: /app/data/probafoot.sqlite
+      LEAGUES: ${LEAGUES:-E0 F1}
+      ODDS_API_KEY: ${ODDS_API_KEY:-}
+      CAPTURE_MINUTES: ${CAPTURE_MINUTES:-240}
+      MIN_CREDITS: ${MIN_CREDITS:-30}
+    healthcheck:
+      disable: true
+
+  # Un seul passage (initialisation ou mise à jour manuelle) : docker compose run --rm worker-once
+  worker-once:
+    <<: *app
+    profiles: ["tools"]
+    restart: "no"
+    command: ["/usr/local/bin/refresh.sh"]
+    environment:
+      PROBAFOOT_DB: /app/data/probafoot.sqlite
+      LEAGUES: ${LEAGUES:-E0 F1}
+      TEST_SEASONS: ${TEST_SEASONS:-2324 2425 2526}
+      RUN_ONCE: "1"
+    healthcheck:
+      disable: true
+
+  # HTTPS automatique (Let's Encrypt) devant l'API. Nécessite un nom de domaine pointant vers le serveur.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["https"]
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      DOMAIN: ${DOMAIN:?définir DOMAIN, par ex. probafoot.example.com}
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [api]
+
+volumes:
+  probafoot-data:
+  caddy-data:
+  caddy-config:
